@@ -1,0 +1,21 @@
+# 환경 변수 (API 키 포함 — 절대 커밋 금지)
+.env
+
+# DB
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# 출력 파일
+output/
+
+# IDE
+.idea/
+.vscode/
+*.iml

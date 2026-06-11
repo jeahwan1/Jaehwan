@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from kbo_analyzer.predictor import _generate_reasons; r = _generate_reasons\\('KIA', 'LG', 0.62, [1.0, 0.28, 0.24, 0.6, 0.4, 5.2, 4.1, 4.0, 4.8, 1.08, 26.0, 8.0, 0.0]\\); [print\\(x\\) for x in r]\")",
+      "Bash(python -c \"import sys; [print\\(l.encode\\('utf-8','replace'\\).decode\\('utf-8','replace'\\)\\) for l in sys.stdin.read\\(\\).splitlines\\(\\)]\")",
+      "Bash(python -c ' *)",
+      "Bash(del *)",
+      "PowerShell(& \"C:\\\\Users\\\\admin\\\\PycharmProjects\\\\Jaehwan\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import requests, dotenv; print\\('deps ok'\\)\")",
+      "PowerShell(Tee-Object *)",
+      "Bash(dir C:\\\\Users\\\\admin\\\\PycharmProjects\\\\Jaehwan *)",
+      "Bash(dir C:\\\\Users\\\\admin\\\\PycharmProjects\\\\Jaehwan\\\\kbo_analyzer *)",
+      "Bash(python -c \"from kbo_analyzer.predictor import GamePredictor, _compute_normalize_params, _apply_normalize, _fit_logistic; print\\('OK'\\)\")",
+      "Bash(python -c \"from main import build_korean_prediction_report; preds = [{'home_team':'LG','away_team':'두산','home_win_prob':0.605,'away_win_prob':0.395,'home_score_pred':5.8,'away_score_pred':3.2,'lineup_confirmed':True,'lineup_collected_at':'2026-05-20T10:00:00','lineup_source_note':'확정 라인업','total_score_pred':9.0,'signals':{'home_attack':0.285,'away_attack':0.265,'home_recent_winrate':0.8,'away_recent_winrate':0.4,'home_recent_runs':5.2,'away_recent_runs':3.8,'home_recent_ra':3.2,'away_recent_ra':5.0,'park_factor':0.93,'temp_c':26.0,'wind_kph':8.0,'precip_mm':0.0},'reasons':['LG 타선이 두산 선발 투수 대비 우위 \\(타선 점수 0.285 vs 0.265\\)','LG 최근 5경기 승률 우세 \\(80% vs 40%\\)','홈 어드밴티지\\(LG\\) 반영']}]; print\\(build_korean_prediction_report\\(preds, 'test.json'\\)\\)\")",
+      "Bash(python main.py)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(python -c \"from kbo_analyzer.predictor import GamePredictor; print\\('OK'\\)\")",
+      "Bash(python -c \"import main; print\\('OK'\\)\")",
+      "Bash(python -c \"import main; from kbo_analyzer.predictor import GamePredictor; print\\('OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -c \"import anthropic; print\\(anthropic.__version__\\)\")"
+    ]
+  }
+}
