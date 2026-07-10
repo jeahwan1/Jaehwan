@@ -18,6 +18,14 @@ try:
 except ImportError:
     _SKLEARN_AVAILABLE = False
 
+# 승패 예측 모델에 실제로 넣는 피처(0-indexed, x1..x38 배열 기준).
+# 38개 전부 넣으면 학습표본(~300경기)에 비해 피처가 너무 많아 과적합됨 —
+# walk-forward 백테스트(전 시즌 대상, 날짜별로 그 이전 경기만으로 학습)로
+# 전진선택(forward selection)해 찾은 조합. 정확도 53.3%->63.8%, Brier 0.255->0.236 확인.
+# (x2,x3=타선점수, x14,x15=선발시즌ERA, x16=홈선발최근폼ERA, x18,x19=홈/원정전용승률,
+#  x20=상대전적, x22=원정투수진최근2경기실점, x23=홈타선최고매치업점수)
+_MODEL_FEATURE_IDX = [0, 1, 2, 3, 4, 13, 14, 17, 18, 19, 21, 15, 22]
+
 
 @dataclass
 class FeatureRow:
@@ -346,6 +354,8 @@ class GamePredictor:
                 )
             )
 
+        self._warn_on_stale_pitcher_stats(date, rows)
+
         with self._connect() as con:
             for r in rows:
                 con.execute(
@@ -472,6 +482,21 @@ class GamePredictor:
                     ),
                 )
             con.commit()
+
+    def _warn_on_stale_pitcher_stats(self, date: dt.date, rows: list["FeatureRow"]) -> None:
+        """선발투수 스탯 조회가 조용히 리그평균 기본값으로 떨어지는 걸 감지해 로그로 남긴다.
+        과거에 이 실패가 눈에 안 띄어서 시즌 절반 가까이 x14/x27 등이 기본값으로 고정된 적 있음."""
+        if not rows:
+            return
+        defaulted = sum(
+            1 for r in rows
+            if math.isclose(r.x14_home_starter_era, 4.5) or math.isclose(r.x15_away_starter_era, 4.5)
+        )
+        if defaulted / len(rows) >= 0.3:
+            print(
+                f"[WARN] {date.isoformat()}: 선발 시즌 ERA가 리그평균 기본값으로 떨어진 경기 "
+                f"{defaulted}/{len(rows)}건 — KBO 선수 스탯 조회 실패 가능성, kbo_client.py 점검 필요"
+            )
 
     def _team_attack_features(
         self, pitcher_name: str, pitcher_team: str, batter_team: str, batters: list
@@ -755,7 +780,8 @@ class GamePredictor:
         if len(train) < 20:
             raise RuntimeError("학습 데이터가 부족합니다. backfill 기간을 늘리세요.")
 
-        X = [list(t[:38]) for t in train]
+        X_full = [list(t[:38]) for t in train]
+        X = [[row[i] for i in _MODEL_FEATURE_IDX] for row in X_full]
         y = [int(t[38]) for t in train]
 
         if _SKLEARN_AVAILABLE and len(train) >= 40:
@@ -790,7 +816,8 @@ class GamePredictor:
             lineup_collected_at = rest[38]
             lineup_confirmed = int(rest[39] or 0)
             lineup_source_note = str(rest[40] or "")
-            raw_p = _predict_proba(x)
+            x_model = [x[i] for i in _MODEL_FEATURE_IDX]
+            raw_p = _predict_proba(x_model)
             # 스포츠 예측 특성상 70% 초과 확신은 과신 — 로그오즈를 ±0.847로 클램핑
             log_odds = math.log(raw_p / (1 - raw_p))
             p = _sigmoid(_clamp(log_odds, -0.847, 0.847))  # sigmoid(0.847) ≈ 0.70

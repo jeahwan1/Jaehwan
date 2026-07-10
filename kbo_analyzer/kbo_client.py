@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
 import requests
@@ -52,7 +53,10 @@ class KBORecordClient:
     HITTER_SITUATION_URL = "https://www.koreabaseball.com/Record/Player/HitterDetail/Situation.aspx"
     PITCHER_SITUATION_URL = "https://www.koreabaseball.com/Record/Player/PitcherDetail/Situation.aspx"
     PITCHER_BASIC_URL = "https://www.koreabaseball.com/Record/Player/PitcherDetail/Basic.aspx"
-    PITCHER_GAMELOG_URL = "https://www.koreabaseball.com/Record/Player/PitcherDetail/GameList.aspx"
+    # KBO 공식 사이트에 개별 경기 로그 페이지는 없음 — "경기별기록" 링크가 실제로는
+    # 월별/구장별 등 스플릿 페이지(Game.aspx)로 연결됨. 월별 스플릿의 최근 달을
+    # "최근 폼" 근사치로 사용한다. (구 GameList.aspx는 404 — 항상 기본값만 반환했음)
+    PITCHER_MONTHLY_URL = "https://www.koreabaseball.com/Record/Player/PitcherDetail/Game.aspx"
 
     def __init__(self, timeout: int = 15) -> None:
         self.timeout = timeout
@@ -75,6 +79,37 @@ class KBORecordClient:
         self._matchup_cache: dict[tuple[str, str, str, str], MatchupStat] = {}
         self._pitcher_season_cache: dict[int, PitcherSeasonStats] = {}
         self._pitcher_recent_cache: dict[int, PitcherRecentForm] = {}
+
+    def _get_with_retry(
+        self, url: str, params: dict, retries: int = 3, backoff: float = 0.6
+    ) -> requests.Response:
+        """일시적 네트워크/서버 오류 시 재시도 — 예전엔 1회 실패로 바로 리그 평균값에 영구히 묻혔음."""
+        last_exc: Exception = RuntimeError("no attempt made")
+        for attempt in range(retries):
+            try:
+                res = self.session.get(url, params=params, timeout=self.timeout)
+                res.raise_for_status()
+                return res
+            except Exception as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    time.sleep(backoff * (attempt + 1))
+        raise last_exc
+
+    def _post_with_retry(
+        self, url: str, data: dict, retries: int = 3, backoff: float = 0.6
+    ) -> requests.Response:
+        last_exc: Exception = RuntimeError("no attempt made")
+        for attempt in range(retries):
+            try:
+                res = self.session.post(url, data=data, timeout=self.timeout)
+                res.raise_for_status()
+                return res
+            except Exception as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    time.sleep(backoff * (attempt + 1))
+        raise last_exc
 
     def fetch_matchup(
         self, pitcher_name: str, batter_name: str, pitcher_team: str = "", batter_team: str = ""
@@ -109,10 +144,7 @@ class KBORecordClient:
             return self._hitter_split_cache[pref.player_id]
 
         try:
-            res = self.session.get(
-                self.HITTER_SITUATION_URL, params={"playerId": pref.player_id}, timeout=self.timeout
-            )
-            res.raise_for_status()
+            res = self._get_with_retry(self.HITTER_SITUATION_URL, {"playerId": pref.player_id})
             soup = BeautifulSoup(res.text, "html.parser")
             tbl = _find_table_after_heading(soup, "투수유형별")
             data = _parse_split_avg_table(tbl)
@@ -133,10 +165,7 @@ class KBORecordClient:
         if pref.player_id in self._pitcher_season_cache:
             return self._pitcher_season_cache[pref.player_id]
         try:
-            res = self.session.get(
-                self.PITCHER_BASIC_URL, params={"playerId": pref.player_id}, timeout=self.timeout
-            )
-            res.raise_for_status()
+            res = self._get_with_retry(self.PITCHER_BASIC_URL, {"playerId": pref.player_id})
             soup = BeautifulSoup(res.text, "html.parser")
             stats = _parse_pitcher_season_table(soup)
             self._pitcher_season_cache[pref.player_id] = stats
@@ -151,10 +180,7 @@ class KBORecordClient:
         if pref.player_id in self._pitcher_recent_cache:
             return self._pitcher_recent_cache[pref.player_id]
         try:
-            res = self.session.get(
-                self.PITCHER_GAMELOG_URL, params={"playerId": pref.player_id}, timeout=self.timeout
-            )
-            res.raise_for_status()
+            res = self._get_with_retry(self.PITCHER_MONTHLY_URL, {"playerId": pref.player_id})
             soup = BeautifulSoup(res.text, "html.parser")
             form = _parse_pitcher_recent_form(soup, n=n)
             self._pitcher_recent_cache[pref.player_id] = form
@@ -170,10 +196,7 @@ class KBORecordClient:
             return self._pitcher_split_cache[pref.player_id]
 
         try:
-            res = self.session.get(
-                self.PITCHER_SITUATION_URL, params={"playerId": pref.player_id}, timeout=self.timeout
-            )
-            res.raise_for_status()
+            res = self._get_with_retry(self.PITCHER_SITUATION_URL, {"playerId": pref.player_id})
             soup = BeautifulSoup(res.text, "html.parser")
             tbl = _find_table_after_heading(soup, "타자유형별")
             data = _parse_split_avg_table(tbl)
@@ -197,8 +220,7 @@ class KBORecordClient:
             return None
 
         try:
-            res = self.session.post(self.SEARCH_URL, data={"name": player_name}, timeout=self.timeout)
-            res.raise_for_status()
+            res = self._post_with_retry(self.SEARCH_URL, {"name": player_name})
             payload = res.json()
             candidates = payload.get("now", []) + payload.get("retire", [])
             for c in candidates:
@@ -451,8 +473,12 @@ def _parse_pitcher_season_table(soup: BeautifulSoup) -> PitcherSeasonStats:
     )
 
 
-def _parse_pitcher_recent_form(soup: BeautifulSoup, n: int = 3) -> PitcherRecentForm:
-    table = soup.select_one("table.tData")
+def _parse_pitcher_recent_form(soup: BeautifulSoup, n: int = 3, min_ip: float = 8.0) -> PitcherRecentForm:
+    """KBO 사이트에는 선발별 개별 경기 로그 페이지가 없어(경기별기록 링크도 실제로는
+    스플릿 페이지로 연결됨), "월별" 스플릿 테이블을 최근 폼 근사치로 사용한다.
+    가장 최근 달만 쓰면 등판 1~2회짜리 극단치(ERA 50+)가 나올 수 있어, 최소 min_ip
+    이닝을 채울 때까지 최근 달부터 역순으로 누적한 뒤 ER*9/IP로 계산한다."""
+    table = _find_table_after_heading(soup, "월별")
     if not table:
         return PitcherRecentForm(era=4.50, n_starts=0)
     headers = [th.get_text(strip=True) for th in table.select("tr th")]
@@ -463,45 +489,35 @@ def _parse_pitcher_recent_form(soup: BeautifulSoup, n: int = 3) -> PitcherRecent
         except ValueError:
             return -1
 
+    g_idx = _col("G")
     ip_idx = _col("IP")
     er_idx = _col("ER")
     if ip_idx == -1 or er_idx == -1:
         return PitcherRecentForm(era=4.50, n_starts=0)
 
-    data_rows = [tr for tr in table.select("tr") if tr.select("td")]
-    # Filter for starts: IP > 3 innings to exclude short relief appearances
-    start_rows = []
-    for tr in data_rows:
-        tds = tr.select("td")
-        if ip_idx < len(tds) and _parse_ip(tds[ip_idx].get_text(strip=True)) > 3.0:
-            start_rows.append(tr)
-    if not start_rows:
-        start_rows = data_rows
+    rows = [tr for tr in table.select("tr") if tr.select("td")]
+    rows = [tr for tr in rows if "기록이 없습니다" not in tr.get_text()]
+    if not rows:
+        return PitcherRecentForm(era=4.50, n_starts=0)
 
-    recent = start_rows[-n:] if len(start_rows) >= n else start_rows
     total_ip = 0.0
-    total_er = 0
-    for tr in recent:
+    total_er = 0.0
+    total_g = 0
+    for tr in reversed(rows):
         tds = tr.select("td")
-        if ip_idx < len(tds):
-            total_ip += _parse_ip(tds[ip_idx].get_text(strip=True))
-        if er_idx < len(tds):
-            total_er += _to_int(tds[er_idx].get_text(strip=True))
+        if ip_idx >= len(tds) or er_idx >= len(tds):
+            continue
+        total_ip += _parse_ip_season(tds[ip_idx].get_text(strip=True))
+        total_er += _to_float(tds[er_idx].get_text(strip=True))
+        if 0 <= g_idx < len(tds):
+            total_g += _to_int(tds[g_idx].get_text(strip=True))
+        if total_ip >= min_ip:
+            break
 
     if total_ip < 1.0:
-        return PitcherRecentForm(era=4.50, n_starts=len(recent))
-    return PitcherRecentForm(era=round((total_er / total_ip) * 9, 2), n_starts=len(recent))
-
-
-def _parse_ip(ip_str: str) -> float:
-    """KBO IP 표기 변환: '6.2' = 6이닝 2아웃 = 6.667이닝"""
-    try:
-        val = float(ip_str.replace(",", "").strip())
-        whole = int(val)
-        outs = round((val - whole) * 10)
-        return whole + outs / 3
-    except (ValueError, TypeError):
-        return 0.0
+        return PitcherRecentForm(era=4.50, n_starts=total_g)
+    era = max(0.0, min((total_er / total_ip) * 9, 12.0))
+    return PitcherRecentForm(era=round(era, 2), n_starts=total_g)
 
 
 def _parse_ip_season(ip_str: str) -> float:
